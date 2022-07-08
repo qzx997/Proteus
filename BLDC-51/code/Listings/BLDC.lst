@@ -1,0 +1,358 @@
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE BLDC
+OBJECT MODULE PLACED IN .\Objects\BLDC.obj
+COMPILER INVOKED BY: D:\Keil_MDk\C51\BIN\C51.EXE BLDC.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\BLD
+                    -C.lst) TABS(2) OBJECT(.\Objects\BLDC.obj)
+
+line level    source
+
+   1          #include "reg51.h"
+   2          #include "stdio.h"
+   3          
+   4          #include"1602.h"
+   5          
+   6          sbit HC=P1^0;
+   7          sbit HB=P1^1;
+   8          sbit HA=P1^2;
+   9          
+  10          sbit AL=P3^0;
+  11          sbit AH=P3^1;   
+  12          sbit BL=P3^6;
+  13          sbit BH=P3^3;
+  14          sbit CL=P3^4;
+  15          sbit CH=P3^5;
+  16          
+  17          
+  18          sbit KEY_right=P2^3;
+  19          sbit KEY_left=P2^4;
+  20          
+  21          //TLC2543引脚定义
+  22          sbit ADout=P1^3;   
+  23          sbit ADin=P1^4;
+  24          sbit CS=P1^5;
+  25          sbit CLK=P1^6;
+  26          sbit EOC=P1^7;
+  27          
+  28          
+  29            
+  30          
+  31          
+  32          unsigned char PWM = 20;
+  33          unsigned int adval;
+  34          
+  35          char cnt_test_1s =0;
+  36          char dir_flag = 0; //方向
+  37          char key_flag = 0; 
+  38          
+  39          char WHITH = 100;
+  40          
+  41          unsigned int cnt = 0;
+  42          
+  43          unsigned int cnt_speed = 0; 
+  44          
+  45          unsigned int cnt_1s = 0;
+  46          
+  47          char fankui = 0;
+  48          
+  49          
+  50          // PID变量定义
+  51          float speed_target_val = 10.0;
+  52          float speed_output_val = 0.0;
+  53          float speed_err = 0.0;
+  54          float speed_err_last = 0.0;
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 2   
+
+  55          float speed_integral = 0.0;
+  56          float kp = 150.0, ki = 0.0002, kd = 6000.0;
+  57          
+  58          int speed = 0, speed_target = 0;
+  59          
+  60          /*****************************************************
+  61          函数功能：将模拟信号转换成数字信号
+  62          ***************************************************/ 
+  63          // 其中 port 为通道: 通道0：port = 0x00 通道1：port = 0x10 通道2：port = 0x20 ... 
+  64          
+  65          uint read2543(uchar port)          
+  66          {
+  67   1        uchar ch,i,j;
+  68   1        uint ad;
+  69   1        ch=port;
+  70   1        for(j=0;j<3;j++)      ///////空循环三次，
+  71   1        { 
+  72   2          ad=0;
+  73   2          ch=port;
+  74   2          EOC=1;
+  75   2          CS=1;
+  76   2          CS=0;
+  77   2          CLK=0;
+  78   2          for(i=0;i<12;i++)
+  79   2          {
+  80   3            if(ADout) ad|=0x01;
+  81   3            ADin=(bit)(ch&0x80);  
+  82   3            if(i==7) ADin=1;   //设置双极性输出
+  83   3            CLK=1;
+  84   3            CLK=0;
+  85   3            ch<<=1;
+  86   3            ad<<=1;
+  87   3          }
+  88   2        }
+  89   1        CS=1;                  /////////转换和读取数值
+  90   1        while(!EOC);
+  91   1        ad>>=1;
+  92   1        return(ad);
+  93   1      }
+  94          
+  95          
+  96          
+  97          void pid_controller()
+  98          {
+  99   1        speed_err = speed_target - speed;
+ 100   1        speed_integral += speed_err;
+ 101   1        speed_output_val = (float)(kp*speed_err) + (float)(ki*speed_integral) + (float)(kd*(speed_err - speed_err
+             -_last)) ;
+ 102   1        
+ 103   1        // 调节PWM
+ 104   1        if(key_flag == 0)
+ 105   1        {   
+ 106   2          if(speed_output_val>=0)
+ 107   2          {
+ 108   3            dir_flag = 0;
+ 109   3            PWM = (unsigned char)speed_output_val;
+ 110   3          }
+ 111   2          else 
+ 112   2          {
+ 113   3            dir_flag = 1;
+ 114   3            PWM = 255 - (unsigned char)speed_output_val;
+ 115   3          }
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 3   
+
+ 116   2        }
+ 117   1        else 
+ 118   1        {
+ 119   2          if(speed_output_val>=0)
+ 120   2          {
+ 121   3            dir_flag = 1;
+ 122   3            PWM = (unsigned char)speed_output_val;
+ 123   3          }
+ 124   2          else 
+ 125   2          {
+ 126   3            dir_flag = 0;
+ 127   3            PWM = 255 - (unsigned char)speed_output_val;
+ 128   3          }
+ 129   2        }
+ 130   1      }
+ 131          
+ 132          main()                    
+ 133          {
+ 134   1        
+ 135   1        char flag_start = 0;
+ 136   1      
+ 137   1        
+ 138   1        
+ 139   1        TMOD=0x11; //T  
+ 140   1        TL0=0xFC;    
+ 141   1        TH0=0x18; 
+ 142   1        ET0=1; 
+ 143   1        EA=1;
+ 144   1        TR0=0;    //启动T0
+ 145   1      
+ 146   1        EA = 1;   //开全局中断
+ 147   1      
+ 148   1        L1602_init();
+ 149   1      
+ 150   1        
+ 151   1        L1602_Write_string(1,1,"aim speed:   ");
+ 152   1      
+ 153   1      
+ 154   1        while(1)
+ 155   1        { 
+ 156   2          
+ 157   2          
+ 158   2          adval=read2543(0x00);  //读取AD
+ 159   2          if(adval>1) 
+ 160   2          {
+ 161   3            flag_start=1;
+ 162   3      //      PWM=adval*1.0/40.96;   //根据AD值设置占空比（0-100%）
+ 163   3            speed_target=(adval-2048)*1.0*3/2048*50/2;
+ 164   3            if(speed_target > 90) speed_target = 90;
+ 165   3          }
+ 166   2          else  flag_start=0;
+ 167   2          
+ 168   2      
+ 169   2          
+ 170   2          if( flag_start)
+ 171   2          {
+ 172   3            TR0=1;    //启动T0
+ 173   3        
+ 174   3            EA = 1;
+ 175   3            
+ 176   3                if(read2543(0x10)>=2048) //正转
+ 177   3            {       
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 4   
+
+ 178   4              speed=(read2543(0x10)-2048)*1.0*3/2048*50;  //读取计算转速
+ 179   4              L1602_Write_char(2,2,' ');
+ 180   4            }
+ 181   3            else   //反转
+ 182   3            {
+ 183   4              speed=(2048-read2543(0x10))*1.0*3/2048*50;  //读取计算转速
+ 184   4              L1602_Write_char(2,2,'-');
+ 185   4            }
+ 186   3            
+ 187   3            
+ 188   3            L1602_Write_char(2,3,speed_target/1000+'0');
+ 189   3            L1602_Write_char(2,4,speed_target%1000/100+'0');
+ 190   3            L1602_Write_char(2,5,speed_target%100/10+'0');
+ 191   3            L1602_Write_char(2,6,speed_target%10+'0');
+ 192   3            
+ 193   3          
+ 194   3          }
+ 195   2          else
+ 196   2          {
+ 197   3            TR0=0;    //关闭T0
+ 198   3            
+ 199   3            EA = 0;
+ 200   3            
+ 201   3            AH=0;AL=0;BH=0;BL=0;CH=0;CL=0;
+ 202   3            
+ 203   3          
+ 204   3      
+ 205   3            L1602_Write_char(2,3,' ');
+ 206   3            L1602_Write_char(2,4,' ');
+ 207   3            L1602_Write_char(2,5,' ');
+ 208   3            L1602_Write_char(2,6,' ');
+ 209   3          } 
+ 210   2        
+ 211   2      
+ 212   2            L1602_Write_char(2,8,'r');
+ 213   2          L1602_Write_char(2,9,'p');
+ 214   2          L1602_Write_char(2,10,'m');
+ 215   2      
+ 216   2          
+ 217   2        
+ 218   2        if(!KEY_right) 
+ 219   2        {
+ 220   3          while(!KEY_right);
+ 221   3      
+ 222   3          key_flag = 0;
+ 223   3      
+ 224   3      
+ 225   3      
+ 226   3        }
+ 227   2      
+ 228   2        if(!KEY_left)
+ 229   2        {
+ 230   3          while(!KEY_left);
+ 231   3      
+ 232   3          key_flag = 1;
+ 233   3      
+ 234   3        
+ 235   3        }
+ 236   2        
+ 237   2      
+ 238   2        fankui=((unsigned char)(HA)<<2) + ((unsigned char)(HB)<<1) + (unsigned char)(HC);
+ 239   2        
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 5   
+
+ 240   2        pid_controller();
+ 241   2      
+ 242   2        }
+ 243   1      }
+ 244          
+ 245          
+ 246          /*********************************************************/
+ 247          // 定时器0中断服务程序.
+ 248          /*********************************************************/
+ 249          void timer0() interrupt 1 
+ 250          {     
+ 251   1      
+ 252   1        TH0  = (65535-500)/256; //50ms
+ 253   1        TL0  = (65535-500)%256;
+ 254   1      
+ 255   1        cnt++;
+ 256   1        if( cnt >= 100 )
+ 257   1        {
+ 258   2          cnt = 0;
+ 259   2        }
+ 260   1        
+ 261   1        if( cnt > PWM )
+ 262   1        {
+ 263   2          if(!dir_flag)
+ 264   2           {
+ 265   3          
+ 266   3            switch(fankui)//
+ 267   3            {
+ 268   4               case 0x06:  AH=0;AL=0;BH=1;BL=0;CH=0;CL=0;break;
+ 269   4              case 0x02:  AH=0;AL=0;BH=0;BL=0;CH=1;CL=0;break;
+ 270   4              case 0X03:  AH=0;AL=0;BH=0;BL=0;CH=1;CL=0;break;
+ 271   4              case 0x01:  AH=0;AL=0;BH=0;BL=1;CH=0;CL=0;break;
+ 272   4              case 0x05:  AH=1;AL=0;BH=0;BL=0;CH=0;CL=0;break;
+ 273   4              case 0x04:  AH=0;AL=0;BH=0;BL=0;CH=0;CL=1;break;
+ 274   4               default: break;
+ 275   4            }
+ 276   3          } 
+ 277   2          else
+ 278   2          {
+ 279   3            switch(fankui)//
+ 280   3            {
+ 281   4             case 0x06:  AH=0;AL=0;BH=0;BL=1;CH=0;CL=0;break;
+ 282   4            case 0x02:  AH=0;AL=0;BH=0;BL=0;CH=0;CL=1;break;
+ 283   4            case 0X03:  AH=0;AL=0;BH=0;BL=0;CH=0;CL=1;break;
+ 284   4            case 0x01:  AH=0;AL=0;BH=1;BL=0;CH=0;CL=0;break;
+ 285   4            case 0x05:  AH=0;AL=0;BH=0;BL=0;CH=1;CL=0;break;
+ 286   4            case 0x04:  AH=0;AL=0;BH=0;BL=0;CH=1;CL=0;break;
+ 287   4             default: break;
+ 288   4            }
+ 289   3          }
+ 290   2        }
+ 291   1        else
+ 292   1        {
+ 293   2            
+ 294   2          if(!dir_flag)
+ 295   2           {
+ 296   3          
+ 297   3            switch(fankui)//
+ 298   3            {
+ 299   4               case 0x06:  AH=0;AL=1;BH=1;BL=0;CH=0;CL=0;break;
+ 300   4              case 0x02:  AH=0;AL=1;BH=0;BL=0;CH=1;CL=0;break;
+ 301   4              case 0X03:  AH=0;AL=0;BH=0;BL=1;CH=1;CL=0;break;
+C51 COMPILER V9.59.0.0   BLDC                                                              07/06/2022 01:32:11 PAGE 6   
+
+ 302   4              case 0x01:  AH=1;AL=0;BH=0;BL=1;CH=0;CL=0;break;
+ 303   4              case 0x05:  AH=1;AL=0;BH=0;BL=0;CH=0;CL=1;break;
+ 304   4              case 0x04:  AH=0;AL=0;BH=1;BL=0;CH=0;CL=1;break;
+ 305   4               default: break;
+ 306   4            }
+ 307   3          } 
+ 308   2          else
+ 309   2          {
+ 310   3            switch(fankui)//
+ 311   3            {
+ 312   4             case 0x06:  AH=1;AL=0;BH=0;BL=1;CH=0;CL=0;break;
+ 313   4            case 0x02:  AH=1;AL=0;BH=0;BL=0;CH=0;CL=1;break;
+ 314   4            case 0X03:  AH=0;AL=0;BH=1;BL=0;CH=0;CL=1;break;
+ 315   4            case 0x01:  AH=0;AL=1;BH=1;BL=0;CH=0;CL=0;break;
+ 316   4            case 0x05:  AH=0;AL=1;BH=0;BL=0;CH=1;CL=0;break;
+ 317   4            case 0x04:  AH=0;AL=0;BH=0;BL=1;CH=1;CL=0;break;
+ 318   4             default: break;
+ 319   4            }
+ 320   3          }
+ 321   2        }
+ 322   1      }
+ 323          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1151    ----
+   CONSTANT SIZE    =     14    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     50       3
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
