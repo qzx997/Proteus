@@ -1,0 +1,5 @@
+".\Objects\STARTUP.obj",
+".\Objects\1602.obj",
+".\Objects\BLDC.obj" 
+TO ".\Objects\temp" 
+PRINT(".\Listings\temp.m51")
